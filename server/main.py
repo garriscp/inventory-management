@@ -4,6 +4,8 @@ from typing import List, Optional
 from pydantic import BaseModel
 from mock_data import inventory_items, orders, demand_forecasts, backlog_items, spending_summary, monthly_spending, category_spending, recent_transactions, purchase_orders
 
+submitted_orders: list = []
+
 app = FastAPI(title="Factory Inventory Management System")
 
 # Quarter mapping for date filtering
@@ -120,6 +122,12 @@ class CreatePurchaseOrderRequest(BaseModel):
     expected_delivery_date: str
     notes: Optional[str] = None
 
+class CreateOrderRequest(BaseModel):
+    customer: str
+    items: List[dict]
+    warehouse: Optional[str] = None
+    category: Optional[str] = None
+
 # API endpoints
 @app.get("/")
 def root():
@@ -149,7 +157,8 @@ def get_orders(
     month: Optional[str] = None
 ):
     """Get all orders with optional filtering"""
-    filtered_orders = apply_filters(orders, warehouse, category, status)
+    all_orders = orders + submitted_orders
+    filtered_orders = apply_filters(all_orders, warehouse, category, status)
     filtered_orders = filter_by_month(filtered_orders, month)
     return filtered_orders
 
@@ -160,6 +169,30 @@ def get_order(order_id: str):
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     return order
+
+@app.post("/api/orders", response_model=Order, status_code=201)
+def create_order(request: CreateOrderRequest):
+    """Create a new restocking order"""
+    from datetime import datetime, timedelta
+    import uuid
+    now = datetime.utcnow()
+    order_number = f"RST-{now.year}-{len(orders) + len(submitted_orders) + 1:04d}"
+    total_value = sum(i.get("quantity", 0) * i.get("unit_price", 0.0) for i in request.items)
+    new_order = {
+        "id": str(uuid.uuid4()),
+        "order_number": order_number,
+        "customer": request.customer,
+        "items": request.items,
+        "status": "Processing",
+        "order_date": now.strftime("%Y-%m-%dT%H:%M:%S"),
+        "expected_delivery": (now + timedelta(days=14)).strftime("%Y-%m-%dT%H:%M:%S"),
+        "total_value": round(total_value, 2),
+        "actual_delivery": None,
+        "warehouse": request.warehouse,
+        "category": request.category
+    }
+    submitted_orders.append(new_order)
+    return new_order
 
 @app.get("/api/demand", response_model=List[DemandForecast])
 def get_demand_forecasts():
